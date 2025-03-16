@@ -1,0 +1,116 @@
+From 26051838f97bb9556e5c4ad78ec84d645a90b1c8 Mon Sep 17 00:00:00 2001
+From: Mikhail Paulyshka <me@mixaill.net>
+Date: Thu, 13 Mar 2025 01:19:05 +0300
+Subject: [PATCH 3/4] x86/rdrand: implement sanity check for RDSEED
+
+On AMD Cyan Skillfish (Family 0x17 Model 0x47 Stepping 0x0) there is
+a situation where RDRAND works perfectly but RDSEED generates FF's
+
+Performs a separate check for RDRAND and RDSEED as their behavior
+may be different.
+
+Signed-off-by: Mikhail Paulyshka <me@mixaill.net>
+---
+ arch/x86/include/asm/msr-index.h       |  1 +
+ arch/x86/kernel/cpu/rdrand.c           | 48 ++++++++++++++++++--------
+ tools/arch/x86/include/asm/msr-index.h |  1 +
+ 3 files changed, 35 insertions(+), 15 deletions(-)
+
+diff --git a/arch/x86/include/asm/msr-index.h b/arch/x86/include/asm/msr-index.h
+index 72765b2fe0d8..bc5ef95cf0cb 100644
+--- a/arch/x86/include/asm/msr-index.h
++++ b/arch/x86/include/asm/msr-index.h
+@@ -614,6 +614,7 @@
+ #define MSR_AMD64_OSVW_STATUS		0xc0010141
+ #define MSR_AMD_PPIN_CTL		0xc00102f0
+ #define MSR_AMD_PPIN			0xc00102f1
++#define MSR_AMD64_CPUID_FN_7		0xc0011002
+ #define MSR_AMD64_CPUID_FN_1		0xc0011004
+ #define MSR_AMD64_LS_CFG		0xc0011020
+ #define MSR_AMD64_DC_CFG		0xc0011022
+diff --git a/arch/x86/kernel/cpu/rdrand.c b/arch/x86/kernel/cpu/rdrand.c
+index eeac00d20926..2184340a0d3c 100644
+--- a/arch/x86/kernel/cpu/rdrand.c
++++ b/arch/x86/kernel/cpu/rdrand.c
+@@ -11,9 +11,10 @@
+ #include <asm/processor.h>
+ #include <asm/archrandom.h>
+ #include <asm/sections.h>
++#include <asm/msr.h>
+ 
+ /*
+- * RDRAND has Built-In-Self-Test (BIST) that runs on every invocation.
++ * RDRAND and RDSEED have Built-In-Self-Test (BIST) that runs on every invocation.
+  * Run the instruction a few times as a sanity check. Also make sure
+  * it's not outputting the same value over and over, which has happened
+  * as a result of past CPU bugs.
+@@ -28,23 +29,40 @@ void x86_init_rdrand(struct cpuinfo_x86 *c)
+ 	bool failure = false;
+ 	size_t i, changed;
+ 
+-	if (!cpu_has(c, X86_FEATURE_RDRAND))
+-		return;
+-
+-	for (changed = 0, i = 0; i < SAMPLES; ++i) {
+-		if (!rdrand_long(&sample)) {
++	if (cpu_has(c, X86_FEATURE_RDRAND)) {
++		for (changed = 0, i = 0; i < SAMPLES; ++i) {
++			if (!rdrand_long(&sample)) {
++				failure = true;
++				break;
++			}
++			changed += i && sample != prev;
++			prev = sample;
++		}
++		if (changed < MIN_CHANGE)
+ 			failure = true;
+-			break;
++
++		if (failure) {
++			clear_cpu_cap(c, X86_FEATURE_RDRAND);
++			pr_emerg("RDRAND is not reliable on this platform; disabling.\n");
+ 		}
+-		changed += i && sample != prev;
+-		prev = sample;
+ 	}
+-	if (changed < MIN_CHANGE)
+-		failure = true;
+ 
+-	if (failure) {
+-		clear_cpu_cap(c, X86_FEATURE_RDRAND);
+-		clear_cpu_cap(c, X86_FEATURE_RDSEED);
+-		pr_emerg("RDRAND is not reliable on this platform; disabling.\n");
++	if (cpu_has(c, X86_FEATURE_RDSEED)) {
++		failure = false;
++		for (changed = 0, i = 0; i < SAMPLES; ++i) {
++			if (!rdseed_long(&sample)) {
++				failure = true;
++				break;
++			}
++			changed += i && sample != prev;
++			prev = sample;
++		}
++		if (changed < MIN_CHANGE)
++			failure = true;
++
++		if (failure) {
++			clear_cpu_cap(c, X86_FEATURE_RDSEED);
++			pr_emerg("RDSEED is not reliable on this platform; disabling.\n");
++		}
+ 	}
+ }
+diff --git a/tools/arch/x86/include/asm/msr-index.h b/tools/arch/x86/include/asm/msr-index.h
+index 3ae84c3b8e6d..3deb6c11f134 100644
+--- a/tools/arch/x86/include/asm/msr-index.h
++++ b/tools/arch/x86/include/asm/msr-index.h
+@@ -612,6 +612,7 @@
+ #define MSR_AMD64_OSVW_STATUS		0xc0010141
+ #define MSR_AMD_PPIN_CTL		0xc00102f0
+ #define MSR_AMD_PPIN			0xc00102f1
++#define MSR_AMD64_CPUID_FN_7		0xc0011002
+ #define MSR_AMD64_CPUID_FN_1		0xc0011004
+ #define MSR_AMD64_LS_CFG		0xc0011020
+ #define MSR_AMD64_DC_CFG		0xc0011022
+-- 
+2.48.1
+
