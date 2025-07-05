@@ -1,0 +1,35 @@
+From 064c91c5f3fc02a6eecd6b0b7cf074e2d0eb75aa Mon Sep 17 00:00:00 2001
+From: Mikhail Paulyshka <me@mixaill.net>
+Date: Sun, 6 Jul 2025 01:46:46 +0300
+Subject: [PATCH 2/2] x86/cpu/amd: disable INVLPGB on AMD Cyan Skillfish
+
+AMD Cyan Skillfish (Family 17h, Model 47h, Stepping 0h) has an issue that
+causes system oopses and panics when performing TLB flush using INVLPGB.
+
+Clearing the X86_FEATURE_INVLPGB flag restoring system stability.
+
+Signed-off-by: Mikhail Paulyshka <me@mixaill.net>
+---
+ arch/x86/kernel/cpu/amd.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/x86/kernel/cpu/amd.c b/arch/x86/kernel/cpu/amd.c
+index 21072f84071a..89b74203396e 100644
+--- a/arch/x86/kernel/cpu/amd.c
++++ b/arch/x86/kernel/cpu/amd.c
+@@ -935,6 +935,12 @@ static void init_amd_zen2(struct cpuinfo_x86 *c)
+ 		msr_clear_bit(MSR_AMD64_CPUID_FN_7, 18);
+ 		pr_emerg("RDSEED is not reliable on this platform; disabling.\n");
+ 	}
++
++	/* Disable INVLPGB on AMD Cyan Skillfish because of an error */
++	if (c->x86_model == 0x47 && c->x86_stepping == 0x0) {
++		clear_cpu_cap(c, X86_FEATURE_INVLPGB);
++		pr_emerg("INVLPGB is not reliable on this platform; disabling.\n");
++	}
+ }
+ 
+ static void init_amd_zen3(struct cpuinfo_x86 *c)
+-- 
+2.50.0
+
